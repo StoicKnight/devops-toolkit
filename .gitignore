@@ -39,3 +39,4 @@ venv/
 # Temporary files
 *.tmp
 *.temp
+bash/domains.txt
