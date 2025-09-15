@@ -15,7 +15,7 @@ usage() {
 
 Usage: ${SCRIPT_NAME} [OPTIONS] <domains_source>
 
-Generates SSL key pairs for a list of domains.
+Generates DKIM RSA key pairs for a list of domains.
 
 The <domains_source> argument is required and can be one of:
   - A path to a file containing one domain per line.
@@ -24,34 +24,34 @@ The <domains_source> argument is required and can be one of:
 Options:
   -o, --output DIR   Specify the output directory for the key pairs.
                      (Default: ${DEFAULT_DKIM_DIR})
+  -b, --bits BITS    Specify the key length in bits.
+                     (Default: 2048)
   -h, --help         Display this help message and exit.
 
 EOF
 }
 
 log() {
-  local level message timestamp
-  level="${1^^}"
-  message="${2}"
+  local level="${1^^}"
+  local message="${2}"
+  local timestamp
   timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-  printf "%s [%s] %s\n" "$timestamp" "$level" "$message"
+  printf "%s [%s] %s\n" "${timestamp}" "${level}" "${message}"
 }
 
 check_dependencies() {
   if ! command -v openssl &>/dev/null; then
     log "ERROR" "Required command 'openssl' is not installed or not in your PATH." >&2
-    return 1
+    exit 1
   fi
-  return 0
 }
 
 gen_key_pair() {
-  local domain output_dir private_key_path public_key_path
-  domain="$1"
-  output_dir="$2"
-
-  private_key_path="${output_dir}/${domain}.priv.key"
-  public_key_path="${output_dir}/${domain}.pub.pem"
+  local domain="$1"
+  local output_dir="$2"
+  local key_bits="$3"
+  local private_key_path="${output_dir}/${domain}.priv.key"
+  local public_key_path="${output_dir}/${domain}.pub.pem"
 
   log "INFO" "Processing domain: ${domain}"
 
@@ -60,13 +60,13 @@ gen_key_pair() {
     return 0
   fi
 
-  log "INFO" "Generating ${KEY_BITS}-bit RSA private key..."
-  if ! openssl genrsa -out "$private_key_path" "${KEY_BITS}" &>/dev/null; then
+  log "INFO" "Generating ${key_bits}-bit RSA private key for ${domain}..."
+  if ! openssl genrsa -out "${private_key_path}" "${key_bits}" &>/dev/null; then
     log "ERROR" "Failed to generate private key for ${domain}"
     return 1
   fi
 
-  log "INFO" "Extracting public key..."
+  log "INFO" "Extracting public key for ${domain}..."
   if ! openssl rsa -in "$private_key_path" -pubout -out "$public_key_path" &>/dev/null; then
     log "ERROR" "Failed to extract public key for ${domain}. Cleaning up private key."
     rm "$private_key_path"
@@ -85,6 +85,7 @@ gen_key_pair() {
 
 main() {
   local output_dir="${DEFAULT_DKIM_DIR}"
+  local key_bits="${KEY_BITS}"
   local domains_source=""
 
   # --- Argument Parsing ---
@@ -92,11 +93,20 @@ main() {
     case "$1" in
       -o | --output)
         if [[ -z ${2-} ]]; then
-          log "ERROR" "The --output flag requires a file path argument." >&2
+          log "ERROR" "The --output flag requires a directory path argument." >&2
           usage >&2
           exit 1
         fi
         output_dir="$2"
+        shift 2
+        ;;
+      -b | --bits)
+        if [[ -z ${2-} ]]; then
+          log "ERROR" "The --bits flag requires a numeric argument." >&2
+          usage >&2
+          exit 1
+        fi
+        key_bits="$2"
         shift 2
         ;;
       -h | --help)
@@ -109,7 +119,7 @@ main() {
         exit 1
         ;;
       *)
-        if [[ -n $domains_source ]]; then
+        if [[ -n ${domains_source} ]]; then
           log "ERROR" "Too many arguments. Only one <domains_source> is allowed." >&2
           usage >&2
           exit 1
@@ -120,16 +130,20 @@ main() {
     esac
   done
 
-  # --- Argument and Dependency Validation ---
-  if [[ -z $domains_source ]]; then
+  # --- Initial Validation ---
+  if [[ -z ${domains_source} ]]; then
     log "ERROR" "Missing required <domains_source> argument." >&2
     usage >&2
     exit 1
   fi
 
-  if ! check_dependencies; then
+  # --- Check sudo elevation ---
+  if [[ ${output_dir} == /etc* && ${EUID} -ne 0 ]]; then
+    log "ERROR" "Writing to '${output_dir}' requires root privileges. Please run with sudo." >&2
     exit 1
   fi
+
+  check_dependencies
 
   # --- Prepare Output Directory ---
   log "INFO" "Using output directory: ${output_dir}"
@@ -144,7 +158,7 @@ main() {
 
   # --- Prepare Domain List ---
   local -a domains=()
-  if [[ -f $domains_source && -r $domains_source ]]; then
+  if [[ -f ${domains_source} && -r $domains_source ]]; then
     log "INFO" "Reading domains from file: ${domains_source}"
     mapfile -t domains < <(grep -v -e '^$' -e '^[[:space:]]*#' <"$domains_source")
   else
@@ -169,7 +183,7 @@ main() {
       continue
     fi
 
-    if gen_key_pair "$clean_domain" "$output_dir"; then
+    if gen_key_pair "$clean_domain" "$output_dir" "$key_bits"; then
       success_count=$((success_count + 1))
     else
       failure_count=$((failure_count + 1))
