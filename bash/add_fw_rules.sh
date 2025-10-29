@@ -51,7 +51,7 @@ log() {
   if [[ ${verbose:-0} -ge $level_num ]]; then
     timestamp=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
     log_line=$(printf "%s [%s:%s] %s" "$timestamp" "$level" "$line_num" "$message")
-    echo "$log_line" >&2
+    echo -e "$log_line" >&2
   fi
 }
 
